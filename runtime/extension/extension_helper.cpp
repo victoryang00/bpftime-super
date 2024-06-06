@@ -67,6 +67,54 @@ static int submit_io_uring_write(struct io_uring *ring, int fd, char *buf,
 	return 0;
 }
 
+static int submit_io_uring_read(struct io_uring *ring, int fd, char *buf,
+				size_t size, off_t offset)
+{
+	struct io_uring_sqe *sqe;
+
+	sqe = io_uring_get_sqe(ring);
+	if (!sqe) {
+		return 1;
+	}
+
+	io_uring_prep_read(sqe, fd, buf, size, offset);
+	sqe->user_data = 2;
+
+	return 0;
+}
+
+static int submit_io_uring_send(struct io_uring *ring, int fd, char *buf,
+				size_t size, int flags)
+{
+	struct io_uring_sqe *sqe;
+
+	sqe = io_uring_get_sqe(ring);
+	if (!sqe) {
+		return 1;
+	}
+
+	io_uring_prep_send(sqe, fd, buf, size, flags);
+	sqe->user_data = 3;
+
+	return 0;
+}
+
+static int submit_io_uring_recv(struct io_uring *ring, int fd, char *buf,
+				size_t size, int flags)
+{
+	struct io_uring_sqe *sqe;
+
+	sqe = io_uring_get_sqe(ring);
+	if (!sqe) {
+		return 1;
+	}
+
+	io_uring_prep_recv(sqe, fd, buf, size, flags);
+	sqe->user_data = 4;
+
+	return 0;
+}
+
 static int submit_io_uring_fsync(struct io_uring *ring, int fd)
 {
 	struct io_uring_sqe *sqe;
@@ -77,7 +125,7 @@ static int submit_io_uring_fsync(struct io_uring *ring, int fd)
 	}
 
 	io_uring_prep_fsync(sqe, fd, IORING_FSYNC_DATASYNC);
-	sqe->user_data = 2;
+	sqe->user_data = 5;
 
 	return 0;
 }
@@ -85,6 +133,7 @@ static int submit_io_uring_fsync(struct io_uring *ring, int fd)
 static int io_uring_init(struct io_uring *ring)
 {
 	int ret = io_uring_queue_init(1024, ring, IORING_SETUP_SINGLE_ISSUER);
+	
 	if (ret) {
 		return 1;
 	}
@@ -113,7 +162,19 @@ uint64_t bpftime_io_uring_submit_write(int fd, char *buf, size_t size)
 {
 	return submit_io_uring_write(&ring, fd, buf, size);
 }
-
+uint64_t bpftime_io_uring_submit_read(int fd, char *buf, size_t size,
+				      off_t offset)
+{
+	return submit_io_uring_read(&ring, fd, buf, size, offset);
+}
+uint64_t bpftime_io_uring_submit_send(int fd, char *buf, size_t size, int flags)
+{
+	return submit_io_uring_send(&ring, fd, buf, size, flags);
+}
+uint64_t bpftime_io_uring_submit_recv(int fd, char *buf, size_t size, int flags)
+{
+	return submit_io_uring_recv(&ring, fd, buf, size, flags);
+}
 uint64_t bpftime_io_uring_submit_fsync(int fd)
 {
 	return submit_io_uring_fsync(&ring, fd);
@@ -170,6 +231,24 @@ extern const bpftime_helper_group extesion_group = { {
 		  .index = EXTENDED_HELPER_IOURING_SUBMIT_WRITE,
 		  .name = "io_uring_submit_write",
 		  .fn = (void *)bpftime_io_uring_submit_write,
+	  } },
+	{ EXTENDED_HELPER_IOURING_SUBMIT_READ,
+	  bpftime_helper_info{
+		  .index = EXTENDED_HELPER_IOURING_SUBMIT_READ,
+		  .name = "io_uring_submit_read",
+		  .fn = (void *)bpftime_io_uring_submit_read,
+	  } },
+	{ EXTENDED_HELPER_IOURING_SUBMIT_SEND,
+	  bpftime_helper_info{
+		  .index = EXTENDED_HELPER_IOURING_SUBMIT_SEND,
+		  .name = "io_uring_submit_send",
+		  .fn = (void *)bpftime_io_uring_submit_send,
+	  } },
+	{ EXTENDED_HELPER_IOURING_SUBMIT_RECV,
+	  bpftime_helper_info{
+		  .index = EXTENDED_HELPER_IOURING_SUBMIT_RECV,
+		  .name = "io_uring_submit_recv",
+		  .fn = (void *)bpftime_io_uring_submit_recv,
 	  } },
 	{ EXTENDED_HELPER_IOURING_SUBMIT_FSYNC,
 	  bpftime_helper_info{
