@@ -140,6 +140,20 @@ static int io_uring_init(struct io_uring *ring)
 	return 0;
 }
 
+static int io_uring_get_sqe_ptr(struct io_uring *ring)
+{
+	return io_uring_get_sqe(ring);
+}
+
+static int io_uring_submit_and_wait_and_seen(struct io_uring *ring, int count)
+{
+	int ret = io_uring_submit_and_wait(ring, count);
+	if (ret < 0) {
+		return ret;
+	}
+	return 0;
+}
+
 static int io_uring_wait_and_seen(struct io_uring *ring,
 				  struct io_uring_cqe *cqe)
 {
@@ -149,6 +163,15 @@ static int io_uring_wait_and_seen(struct io_uring *ring,
 	}
 	io_uring_cqe_seen(ring, cqe);
 	return 0;
+}
+
+static int io_uring_set_linkflag(struct io_uring_sqe *sqe)
+{
+    if (!sqe) {
+        return -1;  
+    }
+    sqe->flags |= IOSQE_IO_LINK; 
+    return 0;  
 }
 
 static struct io_uring ring;
@@ -189,6 +212,21 @@ uint64_t bpftime_io_uring_wait_and_seen(void)
 uint64_t bpftime_io_uring_submit(void)
 {
 	return io_uring_submit(&ring);
+}
+
+uint64_t bpftime_io_uring_setlink(*sqe)
+{
+	return io_uring_set_linkflag(sqe);
+}
+
+uint64_t bpftime_io_uring_submit_and_wait(int count)
+{
+	return io_uring_submit_and_wait_and_seen(&ring, count);
+}
+
+uint64 bpftime_io_uring_get_sqe(void)
+{
+	return io_uring_get_sqe_ptr(&ring);
 }
 #endif
 
@@ -267,6 +305,24 @@ extern const bpftime_helper_group extesion_group = { {
 		  .index = EXTENDED_HELPER_IOURING_SUBMIT,
 		  .name = "io_uring_submit",
 		  .fn = (void *)bpftime_io_uring_submit,
+	  } },
+	  	{ EXTENDED_HELPER_IOURING_SET_LINK,
+	  bpftime_helper_info{
+		  .index = EXTENDED_HELPER_IOURING_SET_LINK,
+		  .name = "io_uring_set_link",
+		  .fn = (void *)bpftime_io_uring_setlink,
+	  } },
+	{ EXTENDED_HELPER_IOURING_SUBMIT_AND_WAIT,
+	  bpftime_helper_info{
+		  .index = EXTENDED_HELPER_IOURING_SUBMIT_AND_WAIT,
+		  .name = "io_uring_submit_and_wait",
+		  .fn = (void *)bpftime_io_uring_submit_and_wait,
+	  } },
+	{ EXTENDED_HELPER_IOURING_GET_SQE,
+	  bpftime_helper_info{
+		  .index = EXTENDED_HELPER_IOURING_GET_SQE,
+		  .name = "io_uring_get_sqe",
+		  .fn = (void *)bpftime_io_uring_get_sqe,
 	  } },
 #endif
 } };
