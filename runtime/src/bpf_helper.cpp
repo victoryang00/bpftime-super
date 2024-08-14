@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <cstring>
+#include <csdtint>
 #include <time.h>
 #include <unistd.h>
 #include <ctime>
@@ -372,6 +373,16 @@ uint64_t bpftime_get_attach_cookie(uint64_t ctx, uint64_t, uint64_t, uint64_t,
 		SPDLOG_DEBUG("Cookie doesn't exist");
 		return 0;
 	}
+}
+
+uint64_t bpftime_trace_vprintk(uint64_t fmt, uint64_t fmt_size, ...)
+{
+	const char *fmt_str = (const char *)fmt;
+	va_list args_list;
+	va_start(args_list, fmt_size);
+	long ret = vprintf(fmt_str, args_list);
+	va_end(args_list);
+	return 0;
 }
 
 uint64_t bpftime_get_smp_processor_id()
@@ -912,7 +923,11 @@ const bpftime_helper_group kernel_helper_group = {
 	  { BPF_FUNC_get_attach_cookie,
 	    bpftime_helper_info{ .index = BPF_FUNC_get_attach_cookie,
 				 .name = "bpf_get_attach_cookie",
-				 .fn = (void *)bpftime_get_attach_cookie } } }
+				 .fn = (void *)bpftime_get_attach_cookie } },
+	  { BPF_FUNC_trace_vprintk,
+	    bpftime_helper_info{ .index = BPF_FUNC_trace_vprintk,
+				 .name = "bpf_trace_vprintk",
+				 .fn = (void *)bpftime_trace_vprintk } } }
 
 };
 // Utility function to get the UFUNC helper group
