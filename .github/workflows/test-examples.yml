@@ -31,23 +31,36 @@ jobs:
       - name: Build and install runtime (with llvm-jit)
         if: ${{matrix.enable_jit}}
         run: |
-          make release-with-llvm-jit -j
+          cmake -Bbuild  -DCMAKE_BUILD_TYPE:STRING=RelWithDebInfo \
+            -DBPFTIME_LLVM_JIT=1 \
+            -DBUILD_BPFTIME_DAEMON=1 \
+            -DCMAKE_CXX_FLAGS="-DDEFAULT_LOGGER_OUTPUT_PATH='\"console\"'"
+          cmake --build build --config RelWithDebInfo --target install -j
       - name: Build and install runtime (without llvm-jit)
         if: ${{!matrix.enable_jit}}
         run: |
-          make release -j
+          cmake -Bbuild  -DCMAKE_BUILD_TYPE:STRING=RelWithDebInfo \
+            -DBPFTIME_LLVM_JIT=0 \
+            -DBUILD_BPFTIME_DAEMON=1 \
+            -DCMAKE_CXX_FLAGS="-DDEFAULT_LOGGER_OUTPUT_PATH='\"console\"'"
+          cmake --build build --config RelWithDebInfo --target install -j
+      - name: Build basic examples
+        run: |
+            make -C example -j
       - name: Upload build results (without jit)
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: ${{!matrix.enable_jit}}
         with:
           name: runtime-package-no-jit-${{matrix.container.name}}
+          include-hidden-files: true
           path: |
             ~/.bpftime
       - name: Upload build results (with jit)
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: ${{matrix.enable_jit}}
         with:
           name: runtime-package-jit-${{matrix.container.name}}
+          include-hidden-files: true
           path: |
             ~/.bpftime
   build-and-test:
@@ -55,10 +68,24 @@ jobs:
     needs: [build-runtime]
     container: 
       image: "manjusakalza/bpftime-base-image:${{matrix.container.image}}"
-      options: --privileged -v /sys/kernel/debug/:/sys/kernel/debug:rw -v /sys/kernel/tracing:/sys/kernel/tracing:rw
+      options: " ${{matrix.privilege_options.options}}"
     strategy:
       fail-fast: true
       matrix:
+        exclude:
+          - privilege_options:
+              enable: false
+            examples:
+              syscall_trace: true
+          - privilege_options:
+              enable: false
+            examples:
+              path: tailcall_minimal
+        privilege_options:
+          - options: "--privileged -v /sys/kernel/debug/:/sys/kernel/debug:rw -v /sys/kernel/tracing:/sys/kernel/tracing:rw"
+            enable: true
+          - options: ""
+            enable: false
         container:
           - image: ubuntu-2204
             name: ubuntu
@@ -137,13 +164,13 @@ jobs:
     steps:
       - name: Download prebuilt runtime (with jit)
         if: ${{matrix.enable_jit}}
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: runtime-package-jit-${{matrix.container.name}}
           path: ~/.bpftime
       - name: Download prebuilt runtime (without jit)
         if: ${{!matrix.enable_jit}}
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: runtime-package-no-jit-${{matrix.container.name}}
           path: ~/.bpftime
