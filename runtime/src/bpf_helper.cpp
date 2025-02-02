@@ -23,7 +23,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <cstring>
-#include <csdtint>
+#include <cstdint>
 #include <time.h>
 #include <unistd.h>
 #include <ctime>

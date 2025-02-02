@@ -130,7 +130,13 @@ static int import_shm_handler_from_json(bpftime_shm &shm, json value, int fd)
 	} else if (handler_type == "bpf_perf_event_handler") {
 		int type = value["attr"]["type"];
 		int pid = value["attr"]["pid"];
-		int tracepoint_id = value["attr"]["tracepoint_id"];
+		
+		int tracepoint_id = 0;
+		try {
+			tracepoint_id = value["attr"]["tracepoint_id"];
+		} catch (std::exception &e) {
+			SPDLOG_INFO("No tracepoint_id found in json");
+		}
 		switch ((bpf_event_type)type) {
 		case bpf_event_type::BPF_TYPE_UPROBE: {
 			int ref_ctr_off = value["attr"]["ref_ctr_off"];

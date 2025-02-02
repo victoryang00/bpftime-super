@@ -67,8 +67,8 @@ static __attribute__((destructor(65535))) void __destruct_shm()
 		// Try our best to remove the current pid from alive agent's set
 		int self_pid = getpid();
 		// It doesn't matter if the current pid is not in the set
-		bpftime::shm_holder.global_shared_memory
-			.remove_pid_from_alive_agent_set(self_pid);
+		// bpftime::shm_holder.global_shared_memory
+		// 	.remove_pid_from_alive_agent_set(self_pid);
 	}
 
 	bpftime_destroy_global_shm();
