@@ -273,8 +273,6 @@ int bpftime::bpftime_export_shm_to_json(const bpftime_shm &shm,
 				      { "attr", attr },
 				      { "name", name } };
 			// append attach fds to the json
-			SPDLOG_INFO("find prog fd={} name={}", i,
-				    prog_handler.name);
 		} else if (std::holds_alternative<bpf_map_handler>(handler)) {
 			auto &map_handler = std::get<bpf_map_handler>(handler);
 			const char *name = map_handler.name.c_str();

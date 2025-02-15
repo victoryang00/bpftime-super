@@ -1,12 +1,13 @@
 #include "spdlog/spdlog.h"
 #include "syscall_trace_attach_private_data.hpp"
 #include <cerrno>
+#include <cstring>
 #include <iterator>
 #include <optional>
 #include <syscall_trace_attach_impl.hpp>
 
 #ifdef __linux__
-#include <asm/unistd.h>  // For architecture-specific syscall numbers
+#include <asm/unistd.h> // For architecture-specific syscall numbers
 #endif
 
 namespace bpftime

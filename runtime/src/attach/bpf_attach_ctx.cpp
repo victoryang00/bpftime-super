@@ -305,10 +305,6 @@ int bpf_attach_ctx::instantiate_perf_event_handler_at(
 		priv_data = private_data_gen(
 			std::string(custom_data.attach_argument), err);
 		if (err < 0) {
-			SPDLOG_ERROR(
-				"Unable to parse private data of attach type {}, err={}, raw string={}",
-				perf_handler.type, err,
-				custom_data.attach_argument);
 			return err;
 		}
 	}
