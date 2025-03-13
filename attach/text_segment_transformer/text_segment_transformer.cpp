@@ -81,6 +81,13 @@ static syscall_hooker_func_t call_hook = &call_orig_syscall;
 		"movq 8(%rsp), %r9\n\t" // arg5
 		"pushq (%rsp)\n\t" // arg6
 		"call syscall_hooker_cxx\n\t"
+		"popq %r9\n\t"
+		"popq %r9\n\t"
+		"popq %r8\n\t"
+		"popq %r10\n\t"
+		"popq %rdx\n\t"
+		"popq %rsi\n\t"
+		"popq %rdi\n\t"
 		"leave\n\t"
 		"ret\n\t");
 

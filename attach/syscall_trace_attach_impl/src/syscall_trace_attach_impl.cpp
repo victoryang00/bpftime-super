@@ -16,6 +16,17 @@ namespace attach
 {
 std::optional<syscall_trace_attach_impl *> global_syscall_trace_attach_impl;
 
+typedef struct{
+	bool* is_overrided;
+	uint64_t* user_ret, *user_ret_ctx;
+} t_info_t;
+static t_info_t t_info;
+static void internal_callback(uint64_t ctx, uint64_t v){
+	*t_info.user_ret = v;
+	*t_info.user_ret_ctx = ctx;
+	*t_info.is_overrided = true;
+}
+
 int64_t syscall_trace_attach_impl::dispatch_syscall(int64_t sys_nr,
 						    int64_t arg1, int64_t arg2,
 						    int64_t arg3, int64_t arg4,
@@ -32,12 +43,16 @@ int64_t syscall_trace_attach_impl::dispatch_syscall(int64_t sys_nr,
 	bool is_overrided = false;
 	uint64_t user_ret = 0;
 	uint64_t user_ret_ctx = 0;
-	curr_thread_override_return_callback =
+	t_info.is_overrided = &is_overrided;
+	t_info.user_ret = &user_ret;
+	t_info.user_ret_ctx = &user_ret_ctx;
+	curr_thread_override_return_callback = internal_callback;
+	/*curr_thread_override_return_callback =
 		override_return_set_callback([&](uint64_t ctx, uint64_t v) {
 			is_overrided = true;
 			user_ret = v;
 			user_ret_ctx = ctx;
-		});
+		}); // */
 
 	if (!sys_enter_callbacks[sys_nr].empty() ||
 	    !global_enter_callbacks.empty()) {
@@ -63,16 +78,21 @@ int64_t syscall_trace_attach_impl::dispatch_syscall(int64_t sys_nr,
 			SPDLOG_DEBUG("ret {}, err {}", ret, err);
 		}
 	}
+	t_info = {};
 	curr_thread_override_return_callback.reset();
 	if (is_overrided) {
 		return user_ret;
 	}
-	curr_thread_override_return_callback =
+	t_info.is_overrided = &is_overrided;
+	t_info.user_ret = &user_ret;
+	t_info.user_ret_ctx = &user_ret_ctx;
+	curr_thread_override_return_callback = internal_callback;
+	/*curr_thread_override_return_callback =
 		override_return_set_callback([&](uint64_t ctx, uint64_t v) {
 			is_overrided = true;
 			user_ret = v;
 			user_ret_ctx = ctx;
-		});
+		});// */
 	SPDLOG_DEBUG("executing original syscall");
 	int64_t ret = orig_syscall(sys_nr, arg1, arg2, arg3, arg4, arg5, arg6);
 	if (!sys_exit_callbacks[sys_nr].empty() ||
