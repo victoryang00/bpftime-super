@@ -4,7 +4,13 @@
 #include <cstring>
 #include <iterator>
 #include <optional>
+#include <atomic>
+#include <format>
+#include <iostream>
 #include <syscall_trace_attach_impl.hpp>
+#include <thread>
+#include <mutex>
+#include <shared_mutex>
 
 #ifdef __linux__
 #include <asm/unistd.h> // For architecture-specific syscall numbers
@@ -14,14 +20,21 @@ namespace bpftime
 {
 namespace attach
 {
-std::optional<syscall_trace_attach_impl *> global_syscall_trace_attach_impl;
+// 使用std::atomic<syscall_trace_attach_impl*>代替std::atomic<std::optional<syscall_trace_attach_impl
+// *>>
+std::atomic<syscall_trace_attach_impl *> global_syscall_trace_attach_impl{
+	nullptr
+};
 
-typedef struct{
-	bool* is_overrided;
-	uint64_t* user_ret, *user_ret_ctx;
+// Thread-local t_info struct to prevent race conditions
+typedef struct {
+	bool *is_overrided;
+	uint64_t *user_ret, *user_ret_ctx;
 } t_info_t;
-static t_info_t t_info;
-static void internal_callback(uint64_t ctx, uint64_t v){
+// Make t_info thread-local to prevent race conditions
+thread_local t_info_t t_info;
+static void internal_callback(uint64_t ctx, uint64_t v)
+{
 	*t_info.user_ret = v;
 	*t_info.user_ret_ctx = ctx;
 	*t_info.is_overrided = true;
@@ -37,8 +50,31 @@ int64_t syscall_trace_attach_impl::dispatch_syscall(int64_t sys_nr,
 	if (sys_nr == __NR_exit_group || sys_nr == __NR_exit)
 		return orig_syscall(sys_nr, arg1, arg2, arg3, arg4, arg5, arg6);
 #endif
-	SPDLOG_DEBUG("Syscall callback {} {} {} {} {} {} {}", sys_nr, arg1,
-		     arg2, arg3, arg4, arg5, arg6);
+
+	// 添加线程本地递归检测
+	thread_local bool in_dispatch = false;
+	if (in_dispatch) {
+		// 检测到递归调用，直接调用原始系统调用
+		SPDLOG_WARN(
+			"Detected recursive call to dispatch_syscall, bypassing to orig_syscall");
+		return orig_syscall(sys_nr, arg1, arg2, arg3, arg4, arg5, arg6);
+	}
+
+	// 设置递归保护标志
+	struct RecursionGuard {
+		bool &flag;
+		RecursionGuard(bool &f) : flag(f)
+		{
+			flag = true;
+		}
+		~RecursionGuard()
+		{
+			flag = false;
+		}
+	} guard(in_dispatch);
+
+	std::cout << std::format("Syscall callback {} {} {} {} {} {} {}\n",
+				 sys_nr, arg1, arg2, arg3, arg4, arg5, arg6);
 	// Indicate whether the return value is overridden
 	bool is_overrided = false;
 	uint64_t user_ret = 0;
@@ -54,30 +90,37 @@ int64_t syscall_trace_attach_impl::dispatch_syscall(int64_t sys_nr,
 			user_ret_ctx = ctx;
 		}); // */
 
-	if (!sys_enter_callbacks[sys_nr].empty() ||
-	    !global_enter_callbacks.empty()) {
-		trace_event_raw_sys_enter ctx;
-		memset(&ctx, 0, sizeof(ctx));
-		ctx.id = sys_nr;
-		ctx.args[0] = arg1;
-		ctx.args[1] = arg2;
-		ctx.args[2] = arg3;
-		ctx.args[3] = arg4;
-		ctx.args[4] = arg5;
-		ctx.args[5] = arg6;
-		for (auto prog : sys_enter_callbacks[sys_nr]) {
-			auto ctx_copy = ctx;
-			uint64_t ret;
-			int err = prog->cb(&ctx_copy, sizeof(ctx_copy), &ret);
-			SPDLOG_DEBUG("ret {}, err {}", ret, err);
-		}
-		for (auto prog : global_enter_callbacks) {
-			auto ctx_copy = ctx;
-			uint64_t ret;
-			int err = prog->cb(&ctx_copy, sizeof(ctx_copy), &ret);
-			SPDLOG_DEBUG("ret {}, err {}", ret, err);
+	// Acquire shared lock for reading callbacks
+	{
+		std::shared_lock<std::shared_mutex> lock(callbacks_mutex);
+		if (!sys_enter_callbacks[sys_nr].empty() ||
+		    !global_enter_callbacks.empty()) {
+			trace_event_raw_sys_enter ctx;
+			memset(&ctx, 0, sizeof(ctx));
+			ctx.id = sys_nr;
+			ctx.args[0] = arg1;
+			ctx.args[1] = arg2;
+			ctx.args[2] = arg3;
+			ctx.args[3] = arg4;
+			ctx.args[4] = arg5;
+			ctx.args[5] = arg6;
+			for (auto prog : sys_enter_callbacks[sys_nr]) {
+				auto ctx_copy = ctx;
+				uint64_t ret;
+				int err = prog->cb(&ctx_copy, sizeof(ctx_copy),
+						   &ret);
+				SPDLOG_DEBUG("ret {}, err {}", ret, err);
+			}
+			for (auto prog : global_enter_callbacks) {
+				auto ctx_copy = ctx;
+				uint64_t ret;
+				int err = prog->cb(&ctx_copy, sizeof(ctx_copy),
+						   &ret);
+				SPDLOG_DEBUG("ret {}, err {}", ret, err);
+			}
 		}
 	}
+
 	t_info = {};
 	curr_thread_override_return_callback.reset();
 	if (is_overrided) {
@@ -95,25 +138,33 @@ int64_t syscall_trace_attach_impl::dispatch_syscall(int64_t sys_nr,
 		});// */
 	SPDLOG_DEBUG("executing original syscall");
 	int64_t ret = orig_syscall(sys_nr, arg1, arg2, arg3, arg4, arg5, arg6);
-	if (!sys_exit_callbacks[sys_nr].empty() ||
-	    !global_exit_callbacks.empty()) {
-		trace_event_raw_sys_exit ctx;
-		memset(&ctx, 0, sizeof(ctx));
-		ctx.id = sys_nr;
-		ctx.ret = ret;
-		for (auto prog : sys_exit_callbacks[sys_nr]) {
-			auto ctx_copy = ctx;
-			uint64_t ret;
-			int err = prog->cb(&ctx_copy, sizeof(ctx_copy), &ret);
-			SPDLOG_DEBUG("ret {}, err {}", ret, err);
-		}
-		for (const auto prog : global_exit_callbacks) {
-			auto ctx_copy = ctx;
-			uint64_t ret;
-			int err = prog->cb(&ctx_copy, sizeof(ctx_copy), &ret);
-			SPDLOG_DEBUG("ret {}, err {}", ret, err);
+
+	// Acquire shared lock for reading callbacks
+	{
+		std::shared_lock<std::shared_mutex> lock(callbacks_mutex);
+		if (!sys_exit_callbacks[sys_nr].empty() ||
+		    !global_exit_callbacks.empty()) {
+			trace_event_raw_sys_exit ctx;
+			memset(&ctx, 0, sizeof(ctx));
+			ctx.id = sys_nr;
+			ctx.ret = ret;
+			for (auto prog : sys_exit_callbacks[sys_nr]) {
+				auto ctx_copy = ctx;
+				uint64_t ret;
+				int err = prog->cb(&ctx_copy, sizeof(ctx_copy),
+						   &ret);
+				SPDLOG_DEBUG("ret {}, err {}", ret, err);
+			}
+			for (const auto prog : global_exit_callbacks) {
+				auto ctx_copy = ctx;
+				uint64_t ret;
+				int err = prog->cb(&ctx_copy, sizeof(ctx_copy),
+						   &ret);
+				SPDLOG_DEBUG("ret {}, err {}", ret, err);
+			}
 		}
 	}
+
 	curr_thread_override_return_callback.reset();
 	if (is_overrided) {
 		return user_ret;
@@ -124,6 +175,9 @@ int64_t syscall_trace_attach_impl::dispatch_syscall(int64_t sys_nr,
 int syscall_trace_attach_impl::detach_by_id(int id)
 {
 	SPDLOG_DEBUG("Detaching syscall trace attach entry {}", id);
+	// Acquire exclusive lock for modifying callbacks and attach_entries
+	std::unique_lock<std::shared_mutex> lock(callbacks_mutex);
+
 	if (auto itr = attach_entries.find(id); itr != attach_entries.end()) {
 		const auto &ent = itr->second;
 		if (ent->is_enter && ent->sys_nr == -1) {
@@ -171,6 +225,11 @@ int syscall_trace_attach_impl::create_attach_with_ebpf_callback(
 				.is_enter = priv_data.is_enter });
 		auto raw_ptr = ent_ptr.get();
 		int id = allocate_id();
+
+		// Acquire exclusive lock for modifying callbacks and
+		// attach_entries
+		std::unique_lock<std::shared_mutex> lock(callbacks_mutex);
+
 		attach_entries[id] = std::move(ent_ptr);
 		if (priv_data.is_enter) {
 			if (priv_data.sys_nr == -1)
@@ -201,15 +260,35 @@ extern "C" int64_t _bpftime__syscall_dispatcher(int64_t sys_nr, int64_t arg1,
 {
 	SPDLOG_DEBUG("Call syscall dispatcher: {} {}, {}, {}, {}, {}, {}",
 		     sys_nr, arg1, arg2, arg3, arg4, arg5, arg6);
-	return global_syscall_trace_attach_impl.value()->dispatch_syscall(
-		sys_nr, arg1, arg2, arg3, arg4, arg5, arg6);
+	// 获取global_syscall_trace_attach_impl的值并检查它是否有值
+	syscall_trace_attach_impl *impl =
+		global_syscall_trace_attach_impl.load();
+	if (impl == nullptr) {
+		SPDLOG_ERROR(
+			"global_syscall_trace_attach_impl has no value, cannot dispatch syscall");
+		return -1; // 返回错误
+	}
+	return impl->dispatch_syscall(sys_nr, arg1, arg2, arg3, arg4, arg5,
+				      arg6);
 }
 
 extern "C" void
 _bpftime__setup_syscall_hooker_callback(syscall_hooker_func_t *hooker)
 {
-	assert(global_syscall_trace_attach_impl.has_value());
-	auto impl = global_syscall_trace_attach_impl.value();
+	//	assert(global_syscall_trace_attach_impl.load().has_value());
+	auto impl = global_syscall_trace_attach_impl.load();
+
+	// Add mutex to protect the setup process
+	static std::mutex setup_mutex;
+	std::lock_guard<std::mutex> lock(setup_mutex);
+
+	// 防止递归调用：检查当前hooker是否已经指向我们的分发器
+	if (*hooker == _bpftime__syscall_dispatcher) {
+		SPDLOG_WARN(
+			"Syscall hooker already set to _bpftime__syscall_dispatcher, skipping to avoid recursive calls");
+		return;
+	}
+
 	impl->set_original_syscall_function(*hooker);
 	SPDLOG_DEBUG(
 		"Saved original syscall hooker (original syscall function): {:x}",

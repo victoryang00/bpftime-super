@@ -3,11 +3,16 @@
 #include <base_attach_impl.hpp>
 #include <memory>
 #include <set>
+#include <atomic>
 #include <unordered_map>
+#include <shared_mutex>
 namespace bpftime
 {
 namespace attach
 {
+// 前向声明
+class syscall_trace_attach_impl;
+
 // Represent the syscall hooker function
 using syscall_hooker_func_t = int64_t (*)(int64_t sys_nr, int64_t arg1,
 					  int64_t arg2, int64_t arg3,
@@ -46,8 +51,7 @@ struct syscall_trace_attach_entry {
 };
 // The global syscall trace instance. This one could be accessed by text segment
 // transformer
-extern std::optional<class syscall_trace_attach_impl *>
-	global_syscall_trace_attach_impl;
+extern std::atomic<syscall_trace_attach_impl *> global_syscall_trace_attach_impl;
 
 // Used by text segment transformer to setup syscall callback
 // Text segment transformer should provide a pointer to its syscall executor
@@ -74,7 +78,9 @@ class syscall_trace_attach_impl final : public base_attach_impl {
 	// could be accessed by text segment transformer
 	void set_to_global()
 	{
-		global_syscall_trace_attach_impl = this;
+		syscall_trace_attach_impl *expected = nullptr;
+		global_syscall_trace_attach_impl.compare_exchange_strong(
+			expected, this);
 	}
 	int detach_by_id(int id);
 	int create_attach_with_ebpf_callback(
@@ -90,6 +96,8 @@ class syscall_trace_attach_impl final : public base_attach_impl {
     private:
 	// The original syscall function
 	syscall_hooker_func_t orig_syscall = nullptr;
+	// Mutex to protect access to callback collections
+	std::shared_mutex callbacks_mutex;
 	std::set<syscall_trace_attach_entry *> global_enter_callbacks,
 		global_exit_callbacks;
 	std::set<syscall_trace_attach_entry *> sys_enter_callbacks[512],

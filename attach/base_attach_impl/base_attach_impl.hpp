@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <atomic>
 #include "attach_private_data.hpp"
 namespace bpftime
 {
@@ -38,10 +39,10 @@ class base_attach_impl {
 		ebpf_run_callback &&cb, const attach_private_data &private_data,
 		int attach_type) = 0;
 
-	// Allocate a new attach entry id
+	// Allocate a new attach entry id in a thread-safe manner
 	int allocate_id()
 	{
-		return next_id++;
+		return next_id.fetch_add(1, std::memory_order_relaxed);
 	}
 
 	// Attach manager will call this function, so that attach impls could
@@ -51,10 +52,10 @@ class base_attach_impl {
 	{
 	}
 
-	virtual ~base_attach_impl(){};
+	virtual ~base_attach_impl() {};
 
     private:
-	int next_id = 1;
+	std::atomic<int> next_id{ 1 }; // Use atomic for thread-safety
 };
 } // namespace attach
 } // namespace bpftime
