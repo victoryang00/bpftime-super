@@ -142,9 +142,9 @@ void *per_cpu_hash_map_impl::elem_lookup_userspace(const void *key)
 	bytes_vec key_vec = this->key_templates[0];
 	key_vec.assign((uint8_t *)key, (uint8_t *)key + key_size);
 	if (auto itr = impl.find(key_vec); itr != impl.end()) {
-		SPDLOG_TRACE("Exit elem lookup of hash map: {}",
-			     spdlog::to_hex(itr->second.begin(),
-					    itr->second.end()));
+		// SPDLOG_TRACE("Exit elem lookup of hash map: {}",
+		// 	     spdlog::to_hex(itr->second.begin(),
+		// 			    itr->second.end()));
 		return &itr->second[0];
 	} else {
 		SPDLOG_TRACE("Exit elem lookup of hash map");

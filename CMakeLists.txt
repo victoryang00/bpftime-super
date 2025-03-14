@@ -138,7 +138,7 @@ else()
 endif()
 
 # spdlog
-set(SPDLOG_USE_STD_FORMAT ON)
+# set(SPDLOG_USE_STD_FORMAT ON)
 add_subdirectory(third_party/spdlog)
 
 if(NOT DEFINED SPDLOG_ACTIVE_LEVEL)
