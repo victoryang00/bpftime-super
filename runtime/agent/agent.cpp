@@ -187,7 +187,7 @@ extern "C" int64_t syscall_callback(int64_t sys_nr, int64_t arg1, int64_t arg2,
 				    int64_t arg3, int64_t arg4, int64_t arg5,
 				    int64_t arg6)
 {
-	return bpftime::attach::global_syscall_trace_attach_impl.value()
+	return bpftime::attach::global_syscall_trace_attach_impl.load()
 		->dispatch_syscall(sys_nr, arg1, arg2, arg3, arg4, arg5, arg6);
 }
 
