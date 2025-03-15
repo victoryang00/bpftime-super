@@ -1,5 +1,6 @@
 #include "spdlog/spdlog.h"
 #include "syscall_trace_attach_private_data.hpp"
+#include <atomic>
 #include <cerrno>
 #include <cstring>
 #include <iterator>
@@ -10,18 +11,27 @@
 #include <asm/unistd.h> // For architecture-specific syscall numbers
 #endif
 
+static std::atomic<bool> in_syscall_trace;
+
+struct dropper {
+	~dropper()
+	{
+		in_syscall_trace.store(false);
+	}
+};
 namespace bpftime
 {
 namespace attach
 {
 std::optional<syscall_trace_attach_impl *> global_syscall_trace_attach_impl;
 
-typedef struct{
-	bool* is_overrided;
-	uint64_t* user_ret, *user_ret_ctx;
+typedef struct {
+	bool *is_overrided;
+	uint64_t *user_ret, *user_ret_ctx;
 } t_info_t;
 static t_info_t t_info;
-static void internal_callback(uint64_t ctx, uint64_t v){
+static void internal_callback(uint64_t ctx, uint64_t v)
+{
 	*t_info.user_ret = v;
 	*t_info.user_ret_ctx = ctx;
 	*t_info.is_overrided = true;
@@ -32,11 +42,18 @@ int64_t syscall_trace_attach_impl::dispatch_syscall(int64_t sys_nr,
 						    int64_t arg3, int64_t arg4,
 						    int64_t arg5, int64_t arg6)
 {
+	if (in_syscall_trace.load()) {
+		SPDLOG_TRACE("Avoiding recursively handling syscalls..");
+		return orig_syscall(sys_nr, arg1, arg2, arg3, arg4, arg5, arg6);
+	}
 // Exit syscall may cause bugs since it's not return to userspace
 #ifdef __linux__
 	if (sys_nr == __NR_exit_group || sys_nr == __NR_exit)
 		return orig_syscall(sys_nr, arg1, arg2, arg3, arg4, arg5, arg6);
 #endif
+	// in_syscall_trace.store(true);
+	// dropper _dropper;
+
 	SPDLOG_DEBUG("Syscall callback {} {} {} {} {} {} {}", sys_nr, arg1,
 		     arg2, arg3, arg4, arg5, arg6);
 	// Indicate whether the return value is overridden
