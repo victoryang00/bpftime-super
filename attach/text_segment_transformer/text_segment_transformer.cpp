@@ -134,7 +134,7 @@ static inline void rewrite_segment(uint8_t *code, size_t len, int perm)
 	ret = cs_open(CS_ARCH_X86, CS_MODE_64, &cs_handle);
 	if (ret != CS_ERR_OK) {
 		SPDLOG_ERROR("Failed to open capstone instance: {}, {}",
-			      (int)ret, cs_strerror(ret));
+			     (int)ret, cs_strerror(ret));
 		exit(1);
 	}
 	const uint8_t *curr_code = code;
@@ -155,7 +155,7 @@ static inline void rewrite_segment(uint8_t *code, size_t len, int perm)
 				uint8_t *curr_pos =
 					(uint8_t *)(uintptr_t)curr_insn.address;
 				SPDLOG_TRACE("Rewrite syscall insn at {}",
-					      (void *)curr_pos);
+					     (void *)curr_pos);
 				curr_pos[0] = 0xff;
 				curr_pos[1] = 0xd0;
 			}
@@ -206,7 +206,7 @@ void setup_syscall_tracer()
 			 MAP_PRIVATE | MAP_FIXED | MAP_ANONYMOUS, -1, 0);
 	    mmap_addr == MAP_FAILED) {
 		SPDLOG_ERROR("Failed to perform mmap: errno={}, message={}",
-			      errno, strerror(errno));
+			     errno, strerror(errno));
 		exit(1);
 	}
 	// Setup jumpings
@@ -244,9 +244,8 @@ void setup_syscall_tracer()
 	// Set the page to execute-only. Keep normal behavior of
 	// dereferencing null-pointers
 	if (int err = mprotect(0, 0x1000, PROT_EXEC); err < 0) {
-		SPDLOG_ERROR(
-			"Failed to set execute only of 0-started page: {}",
-			errno);
+		SPDLOG_ERROR("Failed to set execute only of 0-started page: {}",
+			     errno);
 		exit(1);
 	}
 
@@ -255,30 +254,92 @@ void setup_syscall_tracer()
 
 	std::vector<MapEntry> entries;
 	std::ifstream ifs("/proc/self/maps");
-	while (ifs) {
-		std::string line;
-		std::getline(ifs, line);
 
+	// Get the addresses of this library's symbols to identify the agent's
+	// code
+	void *agent_symbol_addr1 = (void *)&syscall_hooker_asm;
+	void *agent_symbol_addr2 = (void *)&get_call_hook;
+
+	// Find the shared libraries and regions to skip (our agent code)
+	std::vector<std::pair<uint64_t, uint64_t> > skip_regions;
+	std::vector<std::string> agent_libs = { "libbpftime-agent.so",
+						"agent.so", "libbpftime" };
+
+	// First pass: identify agent libraries and their memory regions
+	std::string line;
+	while (std::getline(ifs, line)) {
 		MapEntry curr;
-		char *path_buf;
+		char *path_buf = nullptr;
 		int cnt = sscanf(line.c_str(),
 				 "%" SCNx64 "-%" SCNx64
 				 " %c%c%c%*c %*x %*x:%*x %*d %ms",
 				 &curr.begin, &curr.end, &curr.r, &curr.w,
 				 &curr.x, &path_buf);
-		if (cnt < 5)
-			continue;
-		if (cnt == 6) {
-			std::string buf = path_buf;
+
+		if (cnt == 6 && path_buf) {
+			std::string path = path_buf;
 			free(path_buf);
-			if (buf == "[stack]" || buf == "[vsyscall]") {
-				continue;
+
+			// Check if this is an agent library
+			bool is_agent_lib = false;
+			for (const auto &lib_name : agent_libs) {
+				if (path.find(lib_name) != std::string::npos) {
+					is_agent_lib = true;
+					skip_regions.push_back(
+						{ curr.begin, curr.end });
+					SPDLOG_INFO(
+						"Found agent library: {} at address range: {:#x}-{:#x}",
+						path, curr.begin, curr.end);
+					break;
+				}
+			}
+
+			// Also check if our symbols are in this range (direct
+			// detection)
+			uint64_t addr1 = (uint64_t)agent_symbol_addr1;
+			uint64_t addr2 = (uint64_t)agent_symbol_addr2;
+
+			if ((addr1 >= curr.begin && addr1 < curr.end) ||
+			    (addr2 >= curr.begin && addr2 < curr.end)) {
+				skip_regions.push_back(
+					{ curr.begin, curr.end });
+				SPDLOG_INFO(
+					"Found agent code by symbol at address range: {:#x}-{:#x}",
+					curr.begin, curr.end);
 			}
 		}
 
-		entries.push_back(curr);
+		// Store this entry for the second pass
+		if (cnt >= 5) {
+			entries.push_back(curr);
+		}
 	}
-	SPDLOG_INFO("Rewriting executable segments..");
+
+	// Additional safety: if no agent libraries were found, at least exclude
+	// the region containing our code
+	if (skip_regions.empty()) {
+		Dl_info info;
+		if (dladdr(agent_symbol_addr1, &info)) {
+			SPDLOG_INFO(
+				"Using fallback method to find agent code at: {}",
+				(void *)info.dli_fbase);
+
+			// Go through entries again to find this base address
+			for (const auto &entry : entries) {
+				if ((uint64_t)info.dli_fbase >= entry.begin &&
+				    (uint64_t)info.dli_fbase < entry.end) {
+					skip_regions.push_back(
+						{ entry.begin, entry.end });
+					break;
+				}
+			}
+		}
+	}
+
+	SPDLOG_INFO(
+		"Rewriting executable segments (skipping {} agent regions)..",
+		skip_regions.size());
+
 	// Hack the executable mappings
 	for (const auto &map : entries) {
 		if (map.x == 'x') {
@@ -286,12 +347,42 @@ void setup_syscall_tracer()
 				// Skip pages that we mapped
 				continue;
 			}
-			SPDLOG_DEBUG("Rewriting segment from {:x} to {:x}",
-				      map.begin, map.end);
+
+			// Check if this segment is part of our agent and should
+			// be skipped
+			bool should_skip = false;
+			for (const auto &region : skip_regions) {
+				// Check for any overlap with skip regions
+				if (!(map.end <= region.first ||
+				      map.begin >= region.second)) {
+					should_skip = true;
+					SPDLOG_DEBUG(
+						"Skipping rewrite of agent segment {:#x}-{:#x}",
+						map.begin, map.end);
+					break;
+				}
+			}
+
+			// 跳过 vDSO 和其他特殊内存区域
+			if (map.begin >= 0xffffffffff000000) {
+				SPDLOG_DEBUG(
+					"Skipping special memory region at {:#x}",
+					map.begin);
+				continue;
+			}
+
+			if (should_skip) {
+				continue;
+			}
+
+			SPDLOG_DEBUG("Rewriting segment from {:#x} to {:#x}",
+				     map.begin, map.end);
 			rewrite_segment((uint8_t *)(uintptr_t)(map.begin),
 					map.end - map.begin, map.get_perm());
 		}
 	}
+
+	SPDLOG_INFO("Finished rewriting segments");
 }
 
 } // namespace bpftime

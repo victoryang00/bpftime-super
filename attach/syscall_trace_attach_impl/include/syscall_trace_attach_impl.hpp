@@ -74,6 +74,13 @@ class syscall_trace_attach_impl final : public base_attach_impl {
 	{
 		orig_syscall = func;
 	}
+
+	// Get the original syscall function
+	syscall_hooker_func_t get_original_syscall_function() const
+	{
+		return orig_syscall;
+	}
+
 	// Set this syscall trace attach impl instance to the global ones, which
 	// could be accessed by text segment transformer
 	void set_to_global()
