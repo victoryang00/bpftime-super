@@ -9,6 +9,10 @@ add_library(
     nv_attach_impl_patcher.cpp
     nv_attach_impl_register_guard_patcher.cpp
     nv_attach_utils.cpp
+    gpu_checkpoint_restore.cpp
+    ptx_jit_compiler.cpp
+    gpu_state_manager.cpp
+    gpu_jit_api.cpp
 )
 
 add_dependencies(bpftime_nv_attach_impl bpftime_base_attach_impl spdlog::spdlog FridaGum pos llvmbpf_vm bpftime_vm_compat)

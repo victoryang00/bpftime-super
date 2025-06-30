@@ -3,7 +3,7 @@
 #include "cuda_runtime_api.h"
 #include "driver_types.h"
 #include "frida-gum.h"
-
+#include "gpu_jit_api.hpp"
 #include "llvm_jit_context.hpp"
 #include "nv_attach_private_data.hpp"
 #include "spdlog/spdlog.h"
@@ -117,6 +117,14 @@ nv_attach_impl::nv_attach_impl()
 	assert(listener != nullptr);
 	this->frida_interceptor = interceptor;
 	this->frida_listener = listener;
+	
+	// Initialize GPU checkpoint/restore and self-modifying code support
+	SPDLOG_INFO("Initializing GPU checkpoint/restore and self-modifying code managers");
+	this->gpu_checkpoint_restore = std::make_unique<GPUCheckpointRestore>();
+	this->self_modifying_manager = std::make_unique<SelfModifyingCodeManager>();
+	
+	// Register this instance with the GPU JIT API
+	GPUJITApi::getInstance().setAttachImpl(this);
 	// Lambda: 获取当前线程 TID（Linux 特有）
 	// auto get_tid = []() -> pid_t {
 	// 	return static_cast<pid_t>(syscall(SYS_gettid));
@@ -228,6 +236,21 @@ nv_attach_impl::hack_fatbin(std::vector<uint8_t> &&data_vec)
 	bool trampoline_added = false;
 	auto &to_patch_ptx = ptx_out[0];
 	to_patch_ptx = filter_unprintable_chars(to_patch_ptx);
+	
+	// Check if any kernel requires self-modifying code support
+	bool needs_self_modifying = false;
+	for (const auto &[_, entry] : hook_entries) {
+		if (!entry.kernels.empty()) {
+			for (const auto &kernel : entry.kernels) {
+				if (kernel.find("__jit") != std::string::npos || 
+				    kernel.find("__checkpoint") != std::string::npos) {
+					needs_self_modifying = true;
+					break;
+				}
+			}
+		}
+		if (needs_self_modifying) break;
+	}
 	for (const auto &[_, entry] : hook_entries) {
 		if (std::holds_alternative<nv_attach_cuda_memcapture>(
 			    entry.type)) {
@@ -258,6 +281,46 @@ nv_attach_impl::hack_fatbin(std::vector<uint8_t> &&data_vec)
 	}
 	to_patch_ptx = wrap_ptx_with_trampoline(to_patch_ptx);
 	to_patch_ptx = filter_out_version_headers(to_patch_ptx);
+	
+	// If self-modifying code is needed, inject checkpoint/restore hooks
+	if (needs_self_modifying && self_modifying_manager) {
+		SPDLOG_INFO("Injecting self-modifying code support into PTX");
+		
+		// Add checkpoint/restore function declarations
+		std::string checkpoint_functions = R"(
+// GPU checkpoint/restore support functions
+.extern .func (.param .b32 retval) gpu_create_checkpoint(
+	.param .b64 kernel_name,
+	.param .b32 iteration
+);
+
+.extern .func (.param .b32 retval) gpu_restore_checkpoint(
+	.param .b64 checkpoint_id
+);
+
+.extern .func (.param .b32 retval) gpu_schedule_code_replacement(
+	.param .b64 kernel_name,
+	.param .b64 new_ptx_code,
+	.param .b32 trigger_iteration
+);
+
+)";
+		
+		// Inject at the beginning of the PTX
+		to_patch_ptx = checkpoint_functions + to_patch_ptx;
+		
+		// Register kernels for self-modifying code management
+		for (const auto &[_, entry] : hook_entries) {
+			for (const auto &kernel : entry.kernels) {
+				if (kernel.find("__jit") != std::string::npos || 
+				    kernel.find("__checkpoint") != std::string::npos) {
+					self_modifying_manager->registerKernel(kernel, to_patch_ptx);
+					SPDLOG_INFO("Registered kernel {} for self-modifying code", kernel);
+				}
+			}
+		}
+	}
+	
 	{
 		// filter out comment lines
 		std::istringstream iss(to_patch_ptx);
@@ -384,6 +447,78 @@ int nv_attach_impl::copy_data_to_trampoline_memory()
 	SPDLOG_INFO("constData and map_basic_info copied..");
 
 	return 0;
+}
+
+void nv_attach_impl::scheduleCodeReplacement(const std::string &kernel_name, 
+					     const std::string &new_ptx_code,
+					     int trigger_iteration)
+{
+	if (!self_modifying_manager) {
+		SPDLOG_ERROR("Self-modifying code manager not initialized");
+		return;
+	}
+	
+	SPDLOG_INFO("Scheduling code replacement for kernel {} at iteration {}", 
+		    kernel_name, trigger_iteration);
+	
+	// Compile the new PTX code
+	nvrtcProgram prog;
+	nvrtcCreateProgram(&prog, new_ptx_code.c_str(), kernel_name.c_str(), 
+			   0, nullptr, nullptr);
+	
+	const char *opts[] = {"--gpu-architecture=compute_60"};
+	nvrtcResult compileResult = nvrtcCompileProgram(prog, 1, opts);
+	
+	if (compileResult != NVRTC_SUCCESS) {
+		size_t logSize;
+		nvrtcGetProgramLogSize(prog, &logSize);
+		std::vector<char> log(logSize);
+		nvrtcGetProgramLog(prog, log.data());
+		SPDLOG_ERROR("NVRTC compilation failed: {}", log.data());
+		nvrtcDestroyProgram(&prog);
+		return;
+	}
+	
+	size_t ptxSize;
+	nvrtcGetPTXSize(prog, &ptxSize);
+	std::vector<char> ptx(ptxSize);
+	nvrtcGetPTX(prog, ptx.data());
+	nvrtcDestroyProgram(&prog);
+	
+	// Schedule the replacement
+	self_modifying_manager->scheduleReplacement(kernel_name, 
+						    std::string(ptx.data(), ptxSize),
+						    trigger_iteration);
+}
+
+void nv_attach_impl::enableCheckpointing(const std::string &kernel_name,
+					 CheckpointTrigger trigger)
+{
+	if (!gpu_checkpoint_restore) {
+		SPDLOG_ERROR("GPU checkpoint/restore manager not initialized");
+		return;
+	}
+	
+	SPDLOG_INFO("Enabling checkpointing for kernel {} with trigger type {}", 
+		    kernel_name, static_cast<int>(trigger.type));
+	
+	gpu_checkpoint_restore->enableCheckpointing(kernel_name, trigger);
+}
+
+void nv_attach_impl::restoreCheckpoint(const std::string &checkpoint_id)
+{
+	if (!gpu_checkpoint_restore) {
+		SPDLOG_ERROR("GPU checkpoint/restore manager not initialized");
+		return;
+	}
+	
+	SPDLOG_INFO("Restoring checkpoint {}", checkpoint_id);
+	
+	if (auto err = gpu_checkpoint_restore->restoreCheckpoint(checkpoint_id); 
+	    err != 0) {
+		SPDLOG_ERROR("Failed to restore checkpoint {}: error {}", 
+			     checkpoint_id, err);
+	}
 }
 
 namespace bpftime::attach

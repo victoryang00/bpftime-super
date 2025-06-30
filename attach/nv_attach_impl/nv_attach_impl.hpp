@@ -18,6 +18,7 @@
 #include <sys/ptrace.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
+#include "gpu_checkpoint_restore.hpp"
 
 #include <pos/include/oob/ckpt_dump.h>
 #include <variant>
@@ -98,6 +99,14 @@ class nv_attach_impl final : public base_attach_impl {
 	int copy_data_to_trampoline_memory();
 	TrampolineMemorySetupStage trampoline_memory_state =
 		TrampolineMemorySetupStage::NotSet;
+	
+	// GPU self-modifying code API
+	void scheduleCodeReplacement(const std::string &kernel_name, 
+				     const std::string &new_ptx_code,
+				     int trigger_iteration = -1);
+	void enableCheckpointing(const std::string &kernel_name,
+				 CheckpointTrigger trigger);
+	void restoreCheckpoint(const std::string &checkpoint_id);
 
     private:
 	void *frida_interceptor;
@@ -108,6 +117,10 @@ class nv_attach_impl final : public base_attach_impl {
 	std::map<int, nv_attach_entry> hook_entries;
 	uintptr_t shared_mem_ptr;
 	std::optional<std::vector<MapBasicInfo>> map_basic_info;
+	
+	// GPU checkpoint/restore and self-modifying code support
+	std::unique_ptr<GPUCheckpointRestore> gpu_checkpoint_restore;
+	std::unique_ptr<SelfModifyingCodeManager> self_modifying_manager;
 };
 std::string filter_unprintable_chars(std::string input);
 std::string filter_out_version_headers(const std::string &input);
