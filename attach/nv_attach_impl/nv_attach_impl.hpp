@@ -24,6 +24,12 @@
 #include <variant>
 #include <vector>
 
+// Forward declarations for Frida types
+struct _GumInvocationListener;
+typedef struct _GumInvocationListener GumInvocationListener;
+struct _GumInvocationContext;
+typedef struct _GumInvocationContext GumInvocationContext;
+
 namespace bpftime
 {
 namespace attach
@@ -107,6 +113,10 @@ class nv_attach_impl final : public base_attach_impl {
 	void enableCheckpointing(const std::string &kernel_name,
 				 CheckpointTrigger trigger);
 	void restoreCheckpoint(const std::string &checkpoint_id);
+	
+	// Public accessors for frida setup
+	SelfModifyingCodeManager* getSelfModifyingManager() { return self_modifying_manager.get(); }
+	GPUCheckpointRestore* getGPUCheckpointRestore() { return gpu_checkpoint_restore.get(); }
 
     private:
 	void *frida_interceptor;

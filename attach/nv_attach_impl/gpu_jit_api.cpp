@@ -33,9 +33,10 @@ void GPUJITApi::enableCheckpointing(const std::string& kernel_name,
         return;
     }
     
-    CheckpointTrigger trigger;
-    trigger.type = CheckpointTrigger::TIME_BASED;
-    trigger.threshold = interval_seconds;
+    // Using INSTRUCTION_COUNT as a proxy for time-based checkpointing
+    // The threshold represents the interval in seconds converted to instruction count
+    CheckpointTrigger trigger(CheckpointTrigger::INSTRUCTION_COUNT, 
+                             static_cast<uint64_t>(interval_seconds * 1000000));
     
     attach_impl->enableCheckpointing(kernel_name, trigger);
 }

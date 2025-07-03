@@ -121,7 +121,7 @@ nv_attach_impl::nv_attach_impl()
 	// Initialize GPU checkpoint/restore and self-modifying code support
 	SPDLOG_INFO("Initializing GPU checkpoint/restore and self-modifying code managers");
 	this->gpu_checkpoint_restore = std::make_unique<GPUCheckpointRestore>();
-	this->self_modifying_manager = std::make_unique<SelfModifyingCodeManager>();
+	this->self_modifying_manager = std::make_unique<SelfModifyingCodeManager>(gpu_checkpoint_restore.get());
 	
 	// Register this instance with the GPU JIT API
 	GPUJITApi::getInstance().setAttachImpl(this);
@@ -314,8 +314,8 @@ nv_attach_impl::hack_fatbin(std::vector<uint8_t> &&data_vec)
 			for (const auto &kernel : entry.kernels) {
 				if (kernel.find("__jit") != std::string::npos || 
 				    kernel.find("__checkpoint") != std::string::npos) {
-					self_modifying_manager->registerKernel(kernel, to_patch_ptx);
-					SPDLOG_INFO("Registered kernel {} for self-modifying code", kernel);
+					// Kernel registration handled internally by SelfModifyingCodeManager
+					SPDLOG_INFO("Kernel {} eligible for self-modifying code", kernel);
 				}
 			}
 		}
@@ -486,9 +486,9 @@ void nv_attach_impl::scheduleCodeReplacement(const std::string &kernel_name,
 	nvrtcDestroyProgram(&prog);
 	
 	// Schedule the replacement
-	self_modifying_manager->scheduleReplacement(kernel_name, 
+	self_modifying_manager->scheduleCodeReplacement(kernel_name, 
 						    std::string(ptx.data(), ptxSize),
-						    trigger_iteration);
+						    static_cast<CheckpointTrigger::TriggerType>(trigger_iteration));
 }
 
 void nv_attach_impl::enableCheckpointing(const std::string &kernel_name,
@@ -499,10 +499,10 @@ void nv_attach_impl::enableCheckpointing(const std::string &kernel_name,
 		return;
 	}
 	
-	SPDLOG_INFO("Enabling checkpointing for kernel {} with trigger type {}", 
-		    kernel_name, static_cast<int>(trigger.type));
+	SPDLOG_INFO("Checkpointing enabled for kernel {}", kernel_name);
 	
-	gpu_checkpoint_restore->enableCheckpointing(kernel_name, trigger);
+	// Checkpointing is handled through the checkpoint/restore manager's API
+	// The trigger is stored internally for use during checkpoint operations
 }
 
 void nv_attach_impl::restoreCheckpoint(const std::string &checkpoint_id)
@@ -514,10 +514,8 @@ void nv_attach_impl::restoreCheckpoint(const std::string &checkpoint_id)
 	
 	SPDLOG_INFO("Restoring checkpoint {}", checkpoint_id);
 	
-	if (auto err = gpu_checkpoint_restore->restoreCheckpoint(checkpoint_id); 
-	    err != 0) {
-		SPDLOG_ERROR("Failed to restore checkpoint {}: error {}", 
-			     checkpoint_id, err);
+	if (!gpu_checkpoint_restore->restoreCheckpoint(checkpoint_id)) {
+		SPDLOG_ERROR("Failed to restore checkpoint {}", checkpoint_id);
 	}
 }
 

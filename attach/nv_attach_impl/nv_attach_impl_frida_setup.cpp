@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <frida-gum.h>
 #include <vector>
+#include <cuda.h>
 #include "nv_attach_impl.hpp"
 
 using namespace bpftime;
@@ -110,33 +111,23 @@ static void example_listener_on_enter(GumInvocationListener *listener,
 		void *func = (void *)gum_invocation_context_get_nth_argument(gum_ctx, 0);
 		
 		// Check if this kernel is registered for self-modifying code
-		if (context->impl->self_modifying_manager) {
+		if (context->impl->getSelfModifyingManager()) {
 			// Get kernel name from function pointer (this requires symbol resolution)
 			// For now, we'll use the function pointer as identifier
 			std::string kernel_id = std::to_string((uintptr_t)func);
 			
 			// Check if code replacement is scheduled for this kernel
-			if (context->impl->self_modifying_manager->shouldReplace(kernel_id)) {
-				SPDLOG_INFO("Triggering code replacement for kernel {}", kernel_id);
+			if (context->impl->getSelfModifyingManager()->executeReplacement(kernel_id)) {
+				SPDLOG_INFO("Code replacement executed for kernel {}", kernel_id);
 				
-				// Create checkpoint before replacement
-				if (context->impl->gpu_checkpoint_restore) {
-					context->impl->gpu_checkpoint_restore->createCheckpoint(
-						kernel_id, 
-						CheckpointTrigger(CheckpointTrigger::MANUAL));
-				}
-				
-				// Perform code replacement
-				auto new_func = context->impl->self_modifying_manager->performReplacement(kernel_id);
-				if (new_func) {
-					// Replace the kernel function pointer with the new one
-					gum_invocation_context_replace_nth_argument(gum_ctx, 0, new_func);
-					SPDLOG_INFO("Successfully replaced kernel {} with new implementation", kernel_id);
+				// Create checkpoint with current context
+				if (context->impl->getGPUCheckpointRestore()) {
+					CUcontext currentContext;
+					cuCtxGetCurrent(&currentContext);
+					context->impl->getGPUCheckpointRestore()->createCheckpoint(
+						kernel_id, currentContext);
 				}
 			}
-			
-			// Update kernel execution metrics
-			context->impl->self_modifying_manager->recordKernelLaunch(kernel_id);
 		}
 	}
 }

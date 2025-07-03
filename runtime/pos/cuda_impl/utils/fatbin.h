@@ -1081,7 +1081,7 @@ class POSUtil_CUDA_Fatbin {
 
 			if (entry->kernel_id >= symnum) {
 				POS_WARN(
-					"kernel_id out of bounds within \".nv.info\" section: given(%#x), max(%#x)",
+					"kernel_id out of bounds within \".nv.info\" section: given(%#x), max(%#lx)",
 					entry->kernel_id, symnum);
 				continue;
 			}
