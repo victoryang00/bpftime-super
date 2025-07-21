@@ -126,7 +126,7 @@ static std::string generate_ptx_for_ebpf(const std::vector<ebpf_inst> &inst,
 	SPDLOG_INFO(
 		"Compiling eBPF to PTX {}, eBPF instructions count {}, with arguments {}",
 		func_name, inst.size(), with_arguments);
-	auto original_ptx = *ctx.generate_ptx(with_arguments);
+	auto original_ptx = *ctx.generate_ptx();
 	if (spdlog::get_level() <= SPDLOG_LEVEL_DEBUG) {
 		auto path = "/tmp/dump-ebpf." + func_name + ".ptx";
 

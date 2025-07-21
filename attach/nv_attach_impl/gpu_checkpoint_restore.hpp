@@ -47,6 +47,9 @@ struct GPUKernelState {
     // PTX code
     std::string originalPTX;
     std::string currentPTX;
+    
+    // Loaded module handle
+    CUmodule loadedModule = nullptr;
 };
 
 // GPU checkpoint/restore manager

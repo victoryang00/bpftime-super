@@ -534,6 +534,8 @@ bool SelfModifyingKernel::shouldModify(const void* kernelArgs) {
     
     for (const auto& [condition, modifier] : modifiers) {
         if (condition(const_cast<void*>(kernelArgs))) {
+            // Apply the modification when condition is met
+            currentPTX = modifier(currentPTX);
             return true;
         }
     }
@@ -542,12 +544,16 @@ bool SelfModifyingKernel::shouldModify(const void* kernelArgs) {
 }
 
 std::string SelfModifyingKernel::getModifiedPTX() {
+    // Apply modifications based on current state
+    bool modified = false;
     for (const auto& [condition, modifier] : modifiers) {
         if (condition(nullptr)) {
             currentPTX = modifier(currentPTX);
+            modified = true;
         }
     }
     
+    // If nothing was modified, return the current PTX as is
     return currentPTX;
 }
 

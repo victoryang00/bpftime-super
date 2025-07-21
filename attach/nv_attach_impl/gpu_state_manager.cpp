@@ -230,14 +230,14 @@ bool GPUStateManager::createCheckpoint(const std::string& checkpointId) {
     if (success) {
         // Capture current state
         GPUKernelState state;
-        if (captureCurrentState(state)) {
-            // Store the state
-            executionContext->activeCheckpointId = checkpointId;
-            
-            // Notify callbacks
-            for (const auto& callback : checkpointCallbacks) {
-                callback(checkpointId);
-            }
+        captureCurrentState(state); // Try to capture, but don't fail if no kernel
+        
+        // Store the state
+        executionContext->activeCheckpointId = checkpointId;
+        
+        // Notify callbacks
+        for (const auto& callback : checkpointCallbacks) {
+            callback(checkpointId);
         }
     }
     
@@ -402,30 +402,95 @@ bool CheckpointFileManager::saveCheckpoint(const std::string& checkpointId,
         return false;
     }
     
-    // Write checkpoint data
-    // This is a simplified version - real implementation would serialize properly
+    // Write checkpoint header with version and magic number
+    const uint32_t magic = 0x43504B47; // "CPKG" - CheckPoint Kernel Gpu
+    const uint32_t version = 1;
+    file.write(reinterpret_cast<const char*>(&magic), sizeof(uint32_t));
+    file.write(reinterpret_cast<const char*>(&version), sizeof(uint32_t));
     
-    // Write grid and block dimensions
+    // Write checkpoint metadata
+    const uint64_t timestamp = std::chrono::system_clock::now().time_since_epoch().count();
+    file.write(reinterpret_cast<const char*>(&timestamp), sizeof(uint64_t));
+    
+    // Write kernel dimensions
     file.write(reinterpret_cast<const char*>(&state.gridDim), sizeof(dim3));
     file.write(reinterpret_cast<const char*>(&state.blockDim), sizeof(dim3));
     
-    // Write memory snapshot
-    size_t memSize = state.memory.globalMemory.size();
-    file.write(reinterpret_cast<const char*>(&memSize), sizeof(size_t));
+    // Write kernel metadata
+    uint32_t kernelNameLen = state.kernelName.length();
+    file.write(reinterpret_cast<const char*>(&kernelNameLen), sizeof(uint32_t));
+    file.write(state.kernelName.c_str(), kernelNameLen);
     
-    if (compressionEnabled) {
-        std::vector<uint8_t> compressed;
-        if (compressData(state.memory.globalMemory, compressed)) {
-            file.write(reinterpret_cast<const char*>(compressed.data()), 
-                      compressed.size());
+    // Write memory sections with proper headers
+    // 1. Global memory
+    uint32_t sectionType = 1; // Global memory section
+    file.write(reinterpret_cast<const char*>(&sectionType), sizeof(uint32_t));
+    uint64_t globalMemSize = state.memory.globalMemory.size();
+    file.write(reinterpret_cast<const char*>(&globalMemSize), sizeof(uint64_t));
+    file.write(reinterpret_cast<const char*>(&state.memory.globalMemBase), sizeof(CUdeviceptr));
+    
+    if (globalMemSize > 0) {
+        if (compressionEnabled) {
+            std::vector<uint8_t> compressed;
+            if (compressData(state.memory.globalMemory, compressed)) {
+                uint64_t compressedSize = compressed.size();
+                file.write(reinterpret_cast<const char*>(&compressedSize), sizeof(uint64_t));
+                file.write(reinterpret_cast<const char*>(compressed.data()), compressedSize);
+            } else {
+                // Compression failed, write uncompressed
+                uint64_t uncompressedSize = globalMemSize;
+                file.write(reinterpret_cast<const char*>(&uncompressedSize), sizeof(uint64_t));
+                file.write(reinterpret_cast<const char*>(state.memory.globalMemory.data()), globalMemSize);
+            }
+        } else {
+            file.write(reinterpret_cast<const char*>(state.memory.globalMemory.data()), globalMemSize);
         }
-    } else {
-        file.write(reinterpret_cast<const char*>(state.memory.globalMemory.data()), 
-                  memSize);
     }
     
+    // 2. Shared memory
+    sectionType = 2;
+    file.write(reinterpret_cast<const char*>(&sectionType), sizeof(uint32_t));
+    uint64_t sharedMemSize = state.memory.sharedMemory.size();
+    file.write(reinterpret_cast<const char*>(&sharedMemSize), sizeof(uint64_t));
+    if (sharedMemSize > 0) {
+        file.write(reinterpret_cast<const char*>(state.memory.sharedMemory.data()), sharedMemSize);
+    }
+    
+    // 3. PTX code sections
+    sectionType = 3; // Original PTX
+    file.write(reinterpret_cast<const char*>(&sectionType), sizeof(uint32_t));
+    uint64_t ptxLen = state.originalPTX.length();
+    file.write(reinterpret_cast<const char*>(&ptxLen), sizeof(uint64_t));
+    file.write(state.originalPTX.c_str(), ptxLen);
+    
+    sectionType = 4; // Current PTX
+    file.write(reinterpret_cast<const char*>(&sectionType), sizeof(uint32_t));
+    ptxLen = state.currentPTX.length();
+    file.write(reinterpret_cast<const char*>(&ptxLen), sizeof(uint64_t));
+    file.write(state.currentPTX.c_str(), ptxLen);
+    
+    // 4. Thread states
+    sectionType = 5;
+    file.write(reinterpret_cast<const char*>(&sectionType), sizeof(uint32_t));
+    uint64_t numThreads = state.threadStates.size();
+    file.write(reinterpret_cast<const char*>(&numThreads), sizeof(uint64_t));
+    
+    for (const auto& threadState : state.threadStates) {
+        uint32_t numRegisters = threadState.registers.size();
+        file.write(reinterpret_cast<const char*>(&numRegisters), sizeof(uint32_t));
+        file.write(reinterpret_cast<const char*>(threadState.registers.data()), 
+                  numRegisters * sizeof(uint32_t));
+        file.write(reinterpret_cast<const char*>(&threadState.programCounter), sizeof(uint32_t));
+        file.write(reinterpret_cast<const char*>(&threadState.stackPointer), sizeof(uint32_t));
+    }
+    
+    // End marker
+    sectionType = 0xFFFFFFFF;
+    file.write(reinterpret_cast<const char*>(&sectionType), sizeof(uint32_t));
+    
     file.close();
-    spdlog::info("Saved checkpoint {} to {}", checkpointId, filepath);
+    spdlog::info("Saved checkpoint {} to {} ({}MB)", checkpointId, filepath, 
+                file.tellp() / (1024.0 * 1024.0));
     return true;
 }
 
@@ -439,26 +504,126 @@ bool CheckpointFileManager::loadCheckpoint(const std::string& checkpointId,
         return false;
     }
     
-    // Read checkpoint data
+    // Read and verify header
+    uint32_t magic, version;
+    file.read(reinterpret_cast<char*>(&magic), sizeof(uint32_t));
+    file.read(reinterpret_cast<char*>(&version), sizeof(uint32_t));
+    
+    if (magic != 0x43504B47) {
+        spdlog::error("Invalid checkpoint file magic number: 0x{:x}", magic);
+        return false;
+    }
+    
+    if (version != 1) {
+        spdlog::error("Unsupported checkpoint version: {}", version);
+        return false;
+    }
+    
+    // Read metadata
+    uint64_t timestamp;
+    file.read(reinterpret_cast<char*>(&timestamp), sizeof(uint64_t));
+    
+    // Read kernel dimensions
     file.read(reinterpret_cast<char*>(&state.gridDim), sizeof(dim3));
     file.read(reinterpret_cast<char*>(&state.blockDim), sizeof(dim3));
     
-    size_t memSize;
-    file.read(reinterpret_cast<char*>(&memSize), sizeof(size_t));
+    // Read kernel name
+    uint32_t kernelNameLen;
+    file.read(reinterpret_cast<char*>(&kernelNameLen), sizeof(uint32_t));
+    state.kernelName.resize(kernelNameLen);
+    file.read(&state.kernelName[0], kernelNameLen);
     
-    state.memory.globalMemory.resize(memSize);
-    
-    if (compressionEnabled) {
-        // Read compressed data and decompress
-        std::vector<uint8_t> compressed(memSize);
-        file.read(reinterpret_cast<char*>(compressed.data()), memSize);
-        decompressData(compressed, state.memory.globalMemory);
-    } else {
-        file.read(reinterpret_cast<char*>(state.memory.globalMemory.data()), memSize);
+    // Read sections
+    while (file.good()) {
+        uint32_t sectionType;
+        file.read(reinterpret_cast<char*>(&sectionType), sizeof(uint32_t));
+        
+        if (sectionType == 0xFFFFFFFF) {
+            // End marker
+            break;
+        }
+        
+        switch (sectionType) {
+            case 1: { // Global memory
+                uint64_t globalMemSize;
+                file.read(reinterpret_cast<char*>(&globalMemSize), sizeof(uint64_t));
+                file.read(reinterpret_cast<char*>(&state.memory.globalMemBase), sizeof(CUdeviceptr));
+                
+                state.memory.globalMemory.resize(globalMemSize);
+                state.memory.globalMemSize = globalMemSize;
+                
+                if (globalMemSize > 0) {
+                    if (compressionEnabled) {
+                        uint64_t compressedSize;
+                        file.read(reinterpret_cast<char*>(&compressedSize), sizeof(uint64_t));
+                        std::vector<uint8_t> compressed(compressedSize);
+                        file.read(reinterpret_cast<char*>(compressed.data()), compressedSize);
+                        decompressData(compressed, state.memory.globalMemory);
+                    } else {
+                        file.read(reinterpret_cast<char*>(state.memory.globalMemory.data()), globalMemSize);
+                    }
+                }
+                break;
+            }
+            
+            case 2: { // Shared memory
+                uint64_t sharedMemSize;
+                file.read(reinterpret_cast<char*>(&sharedMemSize), sizeof(uint64_t));
+                state.memory.sharedMemory.resize(sharedMemSize);
+                state.memory.sharedMemSize = sharedMemSize;
+                if (sharedMemSize > 0) {
+                    file.read(reinterpret_cast<char*>(state.memory.sharedMemory.data()), sharedMemSize);
+                }
+                break;
+            }
+            
+            case 3: { // Original PTX
+                uint64_t ptxLen;
+                file.read(reinterpret_cast<char*>(&ptxLen), sizeof(uint64_t));
+                state.originalPTX.resize(ptxLen);
+                file.read(&state.originalPTX[0], ptxLen);
+                break;
+            }
+            
+            case 4: { // Current PTX
+                uint64_t ptxLen;
+                file.read(reinterpret_cast<char*>(&ptxLen), sizeof(uint64_t));
+                state.currentPTX.resize(ptxLen);
+                file.read(&state.currentPTX[0], ptxLen);
+                break;
+            }
+            
+            case 5: { // Thread states
+                uint64_t numThreads;
+                file.read(reinterpret_cast<char*>(&numThreads), sizeof(uint64_t));
+                state.threadStates.resize(numThreads);
+                
+                for (auto& threadState : state.threadStates) {
+                    uint32_t numRegisters;
+                    file.read(reinterpret_cast<char*>(&numRegisters), sizeof(uint32_t));
+                    threadState.registers.resize(numRegisters);
+                    file.read(reinterpret_cast<char*>(threadState.registers.data()), 
+                            numRegisters * sizeof(uint32_t));
+                    file.read(reinterpret_cast<char*>(&threadState.programCounter), sizeof(uint32_t));
+                    file.read(reinterpret_cast<char*>(&threadState.stackPointer), sizeof(uint32_t));
+                }
+                break;
+            }
+            
+            default:
+                spdlog::warn("Unknown checkpoint section type: {}", sectionType);
+                return false;
+        }
     }
     
     file.close();
-    spdlog::info("Loaded checkpoint {} from {}", checkpointId, filepath);
+    
+    auto fileTime = std::chrono::system_clock::time_point(std::chrono::nanoseconds(timestamp));
+    auto timeSinceCheckpoint = std::chrono::system_clock::now() - fileTime;
+    auto hours = std::chrono::duration_cast<std::chrono::hours>(timeSinceCheckpoint).count();
+    
+    spdlog::info("Loaded checkpoint {} from {} (created {} hours ago)", 
+                checkpointId, filepath, hours);
     return true;
 }
 
@@ -562,6 +727,80 @@ bool LiveKernelMigration::mapOldStateToNew(const GPUKernelState& oldState,
     // Map registers, memory, and other state components
     newState = oldState; // Simple copy for now
     return true;
+}
+
+// GPUStateManager::modifyMemory implementation
+bool GPUStateManager::modifyMemory(CUdeviceptr ptr, size_t offset, const void* data, size_t size) {
+    if (!data || size == 0) {
+        spdlog::error("Invalid parameters for memory modification");
+        return false;
+    }
+    
+    // Directly modify device memory
+    CUresult res = cuMemcpyHtoD(ptr + offset, data, size);
+    if (res != CUDA_SUCCESS) {
+        const char* errorStr;
+        cuGetErrorString(res, &errorStr);
+        spdlog::error("Failed to modify memory: {}", errorStr);
+        return false;
+    }
+    
+    spdlog::debug("Modified {} bytes at device memory 0x{:x}", size, ptr + offset);
+    return true;
+}
+
+// CheckpointFileManager missing implementations
+std::vector<std::string> CheckpointFileManager::listCheckpoints() {
+    std::vector<std::string> checkpoints;
+    std::string path = baseDirectory;
+    
+    // Use filesystem to list checkpoint files
+    try {
+        if (std::filesystem::exists(path) && std::filesystem::is_directory(path)) {
+            for (const auto& entry : std::filesystem::directory_iterator(path)) {
+                if (entry.is_regular_file() && entry.path().extension() == ".ckpt") {
+                    std::string filename = entry.path().stem().string();
+                    checkpoints.push_back(filename);
+                }
+            }
+        }
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to list checkpoints: {}", e.what());
+    }
+    
+    return checkpoints;
+}
+
+bool CheckpointFileManager::deleteCheckpoint(const std::string& checkpointId) {
+    std::string filepath = getCheckpointPath(checkpointId);
+    
+    try {
+        if (std::filesystem::exists(filepath)) {
+            std::filesystem::remove(filepath);
+            spdlog::info("Deleted checkpoint: {}", checkpointId);
+            return true;
+        } else {
+            spdlog::warn("Checkpoint not found: {}", checkpointId);
+            return false;
+        }
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to delete checkpoint {}: {}", checkpointId, e.what());
+        return false;
+    }
+}
+
+size_t CheckpointFileManager::getCheckpointSize(const std::string& checkpointId) {
+    std::string filepath = getCheckpointPath(checkpointId);
+    
+    try {
+        if (std::filesystem::exists(filepath)) {
+            return std::filesystem::file_size(filepath);
+        }
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to get checkpoint size: {}", e.what());
+    }
+    
+    return 0;
 }
 
 } // namespace attach

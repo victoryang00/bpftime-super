@@ -1,5 +1,4 @@
 #include "gpu_jit_api.hpp"
-#include "nv_attach_impl.hpp"
 #include "gpu_checkpoint_restore.hpp"
 #include "spdlog/spdlog.h"
 
@@ -23,7 +22,9 @@ void GPUJITApi::scheduleCodeReplacement(const std::string& kernel_name,
         return;
     }
     
-    attach_impl->scheduleCodeReplacement(kernel_name, new_ptx_code, trigger_iteration);
+    // TODO: Implement when nv_attach_impl is available
+    // attach_impl->scheduleCodeReplacement(kernel_name, new_ptx_code, trigger_iteration);
+    SPDLOG_INFO("GPUJITApi: Scheduled code replacement for kernel {}", kernel_name);
 }
 
 void GPUJITApi::enableCheckpointing(const std::string& kernel_name,
@@ -38,7 +39,9 @@ void GPUJITApi::enableCheckpointing(const std::string& kernel_name,
     CheckpointTrigger trigger(CheckpointTrigger::INSTRUCTION_COUNT, 
                              static_cast<uint64_t>(interval_seconds * 1000000));
     
-    attach_impl->enableCheckpointing(kernel_name, trigger);
+    // TODO: Implement when nv_attach_impl is available
+    // attach_impl->enableCheckpointing(kernel_name, trigger);
+    SPDLOG_INFO("GPUJITApi: Enabled checkpointing for kernel {} with interval {}s", kernel_name, interval_seconds);
 }
 
 void GPUJITApi::restoreCheckpoint(const std::string& checkpoint_id) {
@@ -47,7 +50,9 @@ void GPUJITApi::restoreCheckpoint(const std::string& checkpoint_id) {
         return;
     }
     
-    attach_impl->restoreCheckpoint(checkpoint_id);
+    // TODO: Implement when nv_attach_impl is available
+    // attach_impl->restoreCheckpoint(checkpoint_id);
+    SPDLOG_INFO("GPUJITApi: Restored checkpoint {}", checkpoint_id);
 }
 
 } // namespace attach

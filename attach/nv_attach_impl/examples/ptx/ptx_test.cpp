@@ -122,7 +122,7 @@ static std::vector<char> compile(const std::string &ptx)
 	size_t elfSize, infoSize, errorSize;
 	unsigned int minorVer, majorVer;
 
-	const char *compile_options[] = { "--gpu-name=sm_60", "--verbose" };
+	const char *compile_options[] = { "--gpu-name=sm_90", "--verbose" };
 
 	NVPTXCOMPILER_SAFE_CALL(nvPTXCompilerGetVersion(&majorVer, &minorVer));
 	printf("Current PTX Compiler API Version : %d.%d\n", majorVer,
@@ -377,7 +377,7 @@ int main()
 
 	vm.load_code((void *)test_prog, sizeof(test_prog));
 	llvm_bpf_jit_context ctx(vm);
-	auto result = *ctx.generate_ptx(false, "bpf_main", "sm_60");
+	auto result = *ctx.generate_ptx("sm_90");
 	{
 		std::ofstream ofs_result("out.ptx");
 		ofs_result << result;
