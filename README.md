@@ -6,7 +6,10 @@
 
 `eGPU` is the first system to dynamically offload eBPF instrumentation and bytecode directly onto running GPU kernels using real-time PTX injection, significantly reducing instrumentation overhead compared to existing methods.
 
-## **Note: this branch has been merged into https://github.com/eunomia-bpf/bpftime and will be maintained there. This repo contains the oriiginal artifacts.**
+## **Note: this branch has been merged into <https://github.com/eunomia-bpf/bpftime> and will be maintained there. This repo contains the original artifacts for the paper.**
+
+- You can find the examples at <https://github.com/eunomia-bpf/bpftime/tree/master/example>
+- The VM and compiler for compiling eBPF bytecode to GPU: <https://github.com/eunomia-bpf/llvmbpf>
 
 ## Installation
 
