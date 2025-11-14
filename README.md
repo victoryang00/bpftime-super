@@ -47,9 +47,8 @@ eGPU bridges that gap by marrying the flexibility of eBPF with the parallel fire
 | --------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------ |
 | **Dynamic PTX injection**               | At load-time we JIT eBPF → PTX and patch it into the resident kernel | < 1 µs probe overhead on micro-benchmarks        |
 | **Shared eBPF maps across CPU & GPU**   | `boost::managed_shared_memory` exposes the same map to host threads *and* device code | Zero-copy metrics exchange                       |
-| **User-space verifier & JIT (bpftime)** | All safety checks stay in user space; no root privileges required | Fast iteration & lower attack surface            |
-| **Hot-swap instrumentation**            | Add / remove probes while kernels keep running               | Debug live services without downtime             |
-| **Isolation & protection domain**       | PTX-level fencing and gsafe sandbox partition instrumentation into a protected domain | Prevents instrumentation from corrupting application state and enforces security |
+| **Kenrel/Userspace verifier & JIT (bpftime)** | All safety checks can stay in user space; no root privileges required; you can also use kernel eBPF to do better verify | Fast iteration & lower attack surface            |
+| **Run time instrumentation**            | Add / remove probes while application keep running               | Debug live services without downtime             |
 
 ------
 
