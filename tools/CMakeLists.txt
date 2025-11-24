@@ -1,5 +1,6 @@
-add_subdirectory(bpftimetool)
-add_subdirectory(cli)
+# Disabled - these tools have linker issues with symbol visibility
+# add_subdirectory(bpftimetool)
+# add_subdirectory(cli)
 if(BPFTIME_LLVM_JIT)
   message(STATUS "Using llvm-jit")
   add_subdirectory(aot)
